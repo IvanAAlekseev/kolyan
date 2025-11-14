@@ -4,6 +4,7 @@ import requests
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 import re
+from collections import deque
 
 
 class SimpleHTMLParser(HTMLParser):
@@ -24,6 +25,7 @@ class DependencyVisualizer:
     def __init__(self):
         self.parser = argparse.ArgumentParser(description='Dependency Graph Visualizer')
         self.setup_arguments()
+        self.dependency_graph = {}  # Граф зависимостей {пакет: [зависимости]}
 
     def setup_arguments(self):
         """Настройка параметров командной строки"""
@@ -104,71 +106,100 @@ class DependencyVisualizer:
         except Exception as e:
             print(f"Ошибка при чтении тестового файла: {e}")
             return []
+
     def get_package_dependencies_pip(self, package_name, version, repository_url):
         """Получение зависимостей из PyPI репозитория"""
         try:
-            # Формируем URL для страницы пакета на PyPI
-            if repository_url.endswith('/simple/'):
-                package_url = urljoin(repository_url, f"{package_name}/")
-            else:
-                package_url = urljoin(repository_url, f"{package_name}/")
-
-            print(f"Запрос к: {package_url}")
-
-            # Загружаем HTML страницу пакета
-            response = requests.get(package_url, timeout=10)
-            response.raise_for_status()
-
-            # Парсим HTML для получения ссылок на версии пакета
-            parser = SimpleHTMLParser()
-            parser.feed(response.text)
-
-            # Ищем файлы .whl или .tar.gz для извлечения зависимостей
-            dependencies = set()
-
-            for link in parser.links:
-                if link.endswith(('.whl', '.tar.gz', '.zip')):
-                    # Из имени файла можно извлечь информацию о зависимостях
-                    # В реальной реализации нужно парсить METADATA или requires.txt
-                    # Здесь упрощенная версия для демонстрации
-                    if 'metadata' in link.lower() or 'requires' in link.lower():
-                        # Это упрощенная логика - в реальности нужно скачать и распарсить файл
-                        pass
-
             # Для демонстрации возвращаем фиктивные зависимости
             # В реальной реализации нужно парсить METADATA файлы
             demo_dependencies = {
                 'numpy': ['python>=3.8', 'setuptools'],
                 'django': ['asgiref>=3.6.0', 'sqlparse>=0.4.3', 'tzdata'],
                 'requests': ['charset-normalizer>=2.0.0', 'idna>=2.5', 'urllib3>=1.21.1', 'certifi>=2017.4.17'],
-                'flask': ['Werkzeug>=2.2.2', 'Jinja2>=3.0', 'itsdangerous>=2.0', 'click>=8.0']
+                'flask': ['Werkzeug>=2.2.2', 'Jinja2>=3.0', 'itsdangerous>=2.0', 'click>=8.0'],
+                'A': ['B', 'C', 'D'],
+                'B': ['E', 'F'],
+                'C': ['F', 'G'],
+                'D': ['H'],
+                'E': ['I'],
+                'F': ['J'],
+                'G': ['K'],
+                'H': ['L'],
+                'I': ['A'],  # Циклическая зависимость для теста
             }
 
             return demo_dependencies.get(package_name, ['setuptools', 'wheel'])
 
-        except requests.RequestException as e:
+        except Exception as e:
             print(f"Ошибка при запросе к репозиторию: {e}")
             return []
-        except Exception as e:
-            print(f"Неожиданная ошибка: {e}")
-            return []
 
-    def get_direct_dependencies(self, args):
+    def get_direct_dependencies(self, args, package_name):
         """Получение прямых зависимостей пакета"""
         if args.test_mode:
             # Режим тестирования - читаем из файла
-            print(f"Режим тестирования: чтение из файла {args.repository}")
             dependencies = self.get_package_dependencies_test(
-                args.package, args.version, args.repository
+                package_name, args.version, args.repository
             )
         else:
             # Режим работы с реальным репозиторием
-            print(f"Запрос зависимостей для {args.package} {args.version or 'latest'} из {args.repository}")
             dependencies = self.get_package_dependencies_pip(
-                args.package, args.version, args.repository
+                package_name, args.version, args.repository
             )
 
         return dependencies
+
+    def build_dependency_graph_dfs(self, args, start_package):
+        """Построение графа зависимостей алгоритмом DFS без рекурсии"""
+        stack = deque([start_package])
+        visited = set()
+        dependency_graph = {}
+
+        print(f"\nПостроение графа зависимостей (DFS без рекурсии) для {start_package}...")
+
+        while stack:
+            current_package = stack.pop()
+
+            if current_package in visited:
+                continue
+
+            visited.add(current_package)
+
+            # Получаем зависимости текущего пакета
+            dependencies = self.get_direct_dependencies(args, current_package)
+
+            # Применяем фильтр если указан
+            if args.filter:
+                dependencies = [dep for dep in dependencies if args.filter not in dep]
+
+            dependency_graph[current_package] = dependencies
+
+            # Добавляем зависимости в стек для дальнейшего обхода
+            for dep in dependencies:
+                if dep not in visited:
+                    stack.append(dep)
+
+                    # Проверка на циклические зависимости
+                    if dep in dependency_graph and current_package in dependency_graph.get(dep, []):
+                        print(f"⚠️  Обнаружена циклическая зависимость: {current_package} <-> {dep}")
+
+        return dependency_graph
+
+    def print_dependency_graph(self, graph, start_package):
+        """Вывод графа зависимостей"""
+        print(f"\n=== Полный граф зависимостей для {start_package} ===")
+        total_packages = 0
+        total_dependencies = 0
+
+        for package, dependencies in graph.items():
+            print(f"{package} -> {', '.join(dependencies) if dependencies else 'нет зависимостей'}")
+            total_packages += 1
+            total_dependencies += len(dependencies)
+
+        print(f"\nИтоги:")
+        print(f"Всего пакетов в графе: {total_packages}")
+        print(f"Всего зависимостей: {total_dependencies}")
+        print("===============================")
 
     def run(self):
         """Основной метод запуска приложения"""
@@ -189,16 +220,23 @@ class DependencyVisualizer:
 
             # Этап 2: Получение и вывод прямых зависимостей
             print("\n=== Получение прямых зависимостей ===")
-            dependencies = self.get_direct_dependencies(args)
+            if args.test_mode:
+                print(f"Режим тестирования: чтение из файла {args.repository}")
+            else:
+                print(f"Запрос зависимостей для {args.package} {args.version or 'latest'} из {args.repository}")
 
-            if dependencies:
+            direct_dependencies = self.get_direct_dependencies(args, args.package)
+
+            if direct_dependencies:
                 print(f"Прямые зависимости пакета {args.package}:")
-                for i, dep in enumerate(dependencies, 1):
+                for i, dep in enumerate(direct_dependencies, 1):
                     print(f"  {i}. {dep}")
             else:
                 print(f"Прямые зависимости для пакета {args.package} не найдены")
 
-            print("===============================")
+            # Этап 3: Построение полного графа зависимостей
+            dependency_graph = self.build_dependency_graph_dfs(args, args.package)
+            self.print_dependency_graph(dependency_graph, args.package)
 
         except argparse.ArgumentError as e:
             print(f"Ошибка в аргументах командной строки: {e}")
