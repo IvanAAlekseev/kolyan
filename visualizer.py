@@ -43,6 +43,8 @@ class DependencyVisualizer:
                                  help='Режим вывода зависимостей в формате ASCII-дерева')
         self.parser.add_argument('--filter', '-f',
                                  help='Подстрока для фильтрации пакетов')
+        self.parser.add_argument('--load-order', '-l', action='store_true',
+                                 help='Режим вывода порядка загрузки зависимостей (Этап 4)')
 
     def validate_parameters(self, args):
         """Валидация параметров"""
@@ -72,7 +74,8 @@ class DependencyVisualizer:
             'Версия пакета': args.version if args.version else 'Не указана',
             'Имя сгенерированного файла': args.output,
             'Режим вывода ASCII-дерева': 'Включен' if args.ascii_tree else 'Выключен',
-            'Подстрока для фильтрации': args.filter if args.filter else 'Не указана'
+            'Подстрока для фильтрации': args.filter if args.filter else 'Не указана',
+            'Режим порядка загрузки': 'Включен' if args.load_order else 'Выключен'
         }
 
         for key, value in params.items():
@@ -181,7 +184,7 @@ class DependencyVisualizer:
 
                     # Проверка на циклические зависимости
                     if dep in dependency_graph and current_package in dependency_graph.get(dep, []):
-                        print(f"⚠️  Обнаружена циклическая зависимость: {current_package} <-> {dep}")
+                        print(f"! ! Обнаружена циклическая зависимость: {current_package} <-> {dep}")
 
         return dependency_graph
 
@@ -200,6 +203,62 @@ class DependencyVisualizer:
         print(f"Всего пакетов в графе: {total_packages}")
         print(f"Всего зависимостей: {total_dependencies}")
         print("===============================")
+
+    def calculate_load_order(self, graph, start_package):
+        """Расчет порядка загрузки зависимостей (топологическая сортировка)"""
+        print(f"\n=== Расчет порядка загрузки зависимостей для {start_package} ===")
+
+        # Строим обратный граф для подсчета входящих степеней
+        in_degree = {}
+        for package in graph:
+            in_degree[package] = 0
+
+        for package, dependencies in graph.items():
+            for dep in dependencies:
+                if dep in in_degree:
+                    in_degree[dep] += 1
+                else:
+                    in_degree[dep] = 1
+
+        # Алгоритм Кана (топологическая сортировка)
+        queue = deque()
+        load_order = []
+
+        # Добавляем пакеты с нулевой входящей степенью
+        for package, degree in in_degree.items():
+            if degree == 0:
+                queue.append(package)
+
+        steps = 0
+        while queue:
+            steps += 1
+            current = queue.popleft()
+            load_order.append(current)
+
+            print(f"Шаг {steps}: Загружается {current}")
+
+            # Уменьшаем входящую степень зависимостей
+            for dep in graph.get(current, []):
+                if dep in in_degree:
+                    in_degree[dep] -= 1
+                    if in_degree[dep] == 0:
+                        queue.append(dep)
+
+        # Проверка на циклы
+        if len(load_order) != len(graph):
+            print("! ! Обнаружены циклические зависимости! Полный порядок загрузки невозможен.")
+            # Добавляем оставшиеся пакеты
+            remaining = set(graph.keys()) - set(load_order)
+            for package in remaining:
+                load_order.append(package)
+                print(f"! ! Принудительно добавляем {package} (участник цикла)")
+
+        print(f"\nФинальный порядок загрузки:")
+        for i, package in enumerate(load_order, 1):
+            print(f"  {i}. {package}")
+
+        print("===============================")
+        return load_order
 
     def run(self):
         """Основной метод запуска приложения"""
@@ -237,6 +296,10 @@ class DependencyVisualizer:
             # Этап 3: Построение полного графа зависимостей
             dependency_graph = self.build_dependency_graph_dfs(args, args.package)
             self.print_dependency_graph(dependency_graph, args.package)
+
+            # Этап 4: Порядок загрузки зависимостей
+            if args.load_order:
+                load_order = self.calculate_load_order(dependency_graph, args.package)
 
         except argparse.ArgumentError as e:
             print(f"Ошибка в аргументах командной строки: {e}")
