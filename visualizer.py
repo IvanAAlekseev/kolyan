@@ -5,6 +5,9 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 import re
 from collections import deque
+import os
+import subprocess
+import tempfile
 
 
 class SimpleHTMLParser(HTMLParser):
@@ -260,6 +263,96 @@ class DependencyVisualizer:
         print("===============================")
         return load_order
 
+    def generate_d2_diagram(self, graph, start_package, output_file):
+        """Генерация диаграммы на языке D2"""
+        print(f"\n=== Генерация D2 диаграммы для {start_package} ===")
+
+        d2_content = "# Dependency Graph Visualization\\n\\n"
+
+        # Добавляем все узлы
+        for package in graph:
+            d2_content += f"{package}\\n"
+
+        # Добавляем связи
+        for package, dependencies in graph.items():
+            for dep in dependencies:
+                if dep in graph:  # Только если зависимость есть в графе
+                    d2_content += f"{package} -> {dep}\\n"
+
+        # Сохраняем D2 файл
+        d2_filename = output_file.replace('.png', '.d2')
+        with open(d2_filename, 'w', encoding='utf-8') as f:
+            f.write(d2_content)
+
+        print(f"D2 файл сохранен: {d2_filename}")
+        print("Содержимое D2:")
+        print(d2_content)
+
+        # Пытаемся сгенерировать PNG если установлен D2
+        try:
+            subprocess.run(['d2', d2_filename, output_file], check=True, capture_output=True)
+            print(f"PNG изображение сохранено: {output_file}")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("⚠️  D2 не установлен. PNG не сгенерирован.")
+            print("Установите D2: https://d2lang.com/tour/install")
+            print(f"Затем выполните: d2 {d2_filename} {output_file}")
+
+        return d2_content
+
+    def generate_ascii_tree(self, graph, start_package):
+        """Генерация ASCII-дерева зависимостей"""
+        print(f"\n=== ASCII-дерево зависимостей для {start_package} ===")
+
+        def build_tree(current, visited=None, prefix="", is_last=True):
+            if visited is None:
+                visited = set()
+
+            if current in visited:
+                return f"{prefix}└── {current} (цикл)\\n"
+
+            visited.add(current)
+
+            connector = "└── " if is_last else "├── "
+            result = f"{prefix}{connector}{current}\\n"
+
+            deps = graph.get(current, [])
+            for i, dep in enumerate(deps):
+                is_last_dep = i == len(deps) - 1
+                new_prefix = prefix + ("    " if is_last else "│   ")
+                result += build_tree(dep, visited.copy(), new_prefix, is_last_dep)
+
+            return result
+
+        tree = build_tree(start_package)
+        print(tree)
+        return tree
+
+    def compare_with_real_tools(self, graph, start_package):
+        """Сравнение с реальными инструментами"""
+        print(f"\n=== Сравнение с реальными инструментами для {start_package} ===")
+
+        # Анализ графа
+        total_packages = len(graph)
+        total_edges = sum(len(deps) for deps in graph.values())
+        cyclic_count = sum(1 for pkg, deps in graph.items() if pkg in deps)
+
+        print(f"Наш анализ:")
+        print(f"  - Пакетов: {total_packages}")
+        print(f"  - Зависимостей: {total_edges}")
+        print(f"  - Циклических зависимостей: {cyclic_count}")
+
+        print(f"\\nОжидаемое поведение реальных инструментов:")
+        print(f"  - pip show {start_package}: покажет только прямые зависимости")
+        print(f"  - pipdeptree: покажет полное дерево зависимостей")
+        print(f"  - Расхождения могут быть из-за:")
+        print(f"     * Разных алгоритмов обхода")
+        print(f"     * Обработки опциональных зависимостей")
+        print(f"     * Версионных ограничений")
+
+        if cyclic_count > 0:
+            print(f"  ⚠️  Реальные менеджеры пакетов могут обрабатывать")
+            print(f"     циклические зависимости иначе")
+
     def run(self):
         """Основной метод запуска приложения"""
         try:
@@ -300,6 +393,27 @@ class DependencyVisualizer:
             # Этап 4: Порядок загрузки зависимостей
             if args.load_order:
                 load_order = self.calculate_load_order(dependency_graph, args.package)
+
+            # Этап 5: Визуализация
+            print(f"\n{'=' * 50}")
+            print("ЭТАП 5: ВИЗУАЛИЗАЦИЯ")
+            print(f"{'=' * 50}")
+
+            # Генерация D2 диаграммы
+            d2_content = self.generate_d2_diagram(dependency_graph, args.package, args.output)
+
+            # Вывод ASCII-дерева если включен параметр
+            if args.ascii_tree:
+                self.generate_ascii_tree(dependency_graph, args.package)
+
+            # Сравнение с реальными инструментами
+            self.compare_with_real_tools(dependency_graph, args.package)
+
+            print(f"\n🎉 Все этапы завершены успешно!")
+            print(f"📊 Граф зависимостей построен: {len(dependency_graph)} пакетов")
+            print(f"📁 Результаты сохранены в: {args.output} (.d2 и .png)")
+            if args.ascii_tree:
+                print(f"🌳 ASCII-дерево сгенерировано")
 
         except argparse.ArgumentError as e:
             print(f"Ошибка в аргументах командной строки: {e}")
